@@ -1,0 +1,21 @@
+[
+  {
+    "id": "teacher-kawamura",
+    "name": "川村 美咲",
+    "subject": "数学 / 理科",
+    "email": "kawamura@example.com"
+  },
+  {
+    "id": "teacher-sugiyama",
+    "name": "杉山 崇",
+    "subject": "英語 / 現代文",
+    "email": "sugiyama@example.com"
+  },
+  {
+    "id": "teacher-hori",
+    "name": "堀 航平",
+    "subject": "小論文 / 面接",
+    "email": "hori@example.com"
+  }
+]
+

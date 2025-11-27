@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>保存が完了しました | 振り返りシート</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='styles.css', v=asset_version) }}"
+    />
+  </head>
+  <body class="complete">
+    <main class="complete-card">
+      <p class="eyebrow">Upload Complete</p>
+      <h1>振り返りシートを保存しました</h1>
+      <p class="muted">
+        {{ result.teacher.name }} が {{ result.student.name }} さんの記録を
+        {{ result.savedAt }} (UTC) に登録しました。
+      </p>
+
+      <div class="complete-details">
+        <p>
+          <strong>ドキュメント:</strong>
+          <a href="{{ result.document.webViewLink }}" target="_blank">
+            {{ result.document.name }}
+          </a>
+        </p>
+        {% if result.document.webContentLink %}
+        <p>
+          <strong>ダウンロード:</strong>
+          <a href="{{ result.document.webContentLink }}" target="_blank">
+            ファイルを開く
+          </a>
+        </p>
+        {% endif %}
+        <p>
+          <strong>生徒:</strong> {{ result.student.name }} ({{ result.student.grade
+          }})
+        </p>
+      </div>
+
+      <div class="actions">
+        <a class="primary" href="{{ url_for('index') }}">別の生徒を続ける</a>
+      </div>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>振り返りシート自動保存ツール</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='styles.css', v=asset_version) }}"
+    />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Reflection Support</p>
+        <h1>振り返りシート自動保存</h1>
+      </div>
+      <div class="header-meta">
+        {% if oauth_status.connected %}
+        <span class="status-dot is-online"></span>
+        <span>Google 接続済み</span>
+        <a class="ghost small" href="{{ url_for('oauth_start') }}">再認証</a>
+        {% else %}
+        <span class="status-dot is-offline"></span>
+        <span>Google 未接続</span>
+        <a class="primary small" href="{{ url_for('oauth_start') }}">Googleと接続</a>
+        {% endif %}
+      </div>
+    </header>
+
+    {% if oauth_message %}
+    <div class="alert alert-info">
+      {{ oauth_message }}
+    </div>
+    {% endif %}
+    {% if error %}
+    <div class="alert alert-error">
+      <strong>エラー:</strong> {{ error }}
+    </div>
+    {% endif %}
+    {% if not oauth_status.connected %}
+    <div class="inline-message" data-variant="warning">
+      Google アカウントと連携するとドキュメントを自動保存できます。
+      <a class="inline-link" href="{{ url_for('oauth_start') }}">今すぐ接続</a>
+    </div>
+    {% endif %}
+
+    <main class="layout">
+      <section class="card" id="step-picker">
+        <div class="card-header">
+          <h2>1. 対象の選択</h2>
+          <p class="muted">
+            講師・生徒・保存先を選択すると、次の画面で入力フォームが開きます。
+          </p>
+        </div>
+        <div class="inline-message is-hidden" data-error-box></div>
+        <form id="setup-form">
+          <div class="field">
+            <label for="teacher-select">講師</label>
+            <select id="teacher-select" name="teacher_id" required>
+              <option value="">選択してください</option>
+            </select>
+          </div>
+
+          <div class="tabs" role="tablist">
+            <button
+              type="button"
+              class="tab is-active"
+              data-mode="existing"
+              aria-selected="true"
+            >
+              すでに登録済みの生徒
+            </button>
+            <button
+              type="button"
+              class="tab"
+              data-mode="new"
+              aria-selected="false"
+            >
+              生徒の新規作成
+            </button>
+          </div>
+
+          <div class="tab-pane is-active" data-pane="existing">
+            <div class="field">
+              <label for="student-select">生徒</label>
+              <select id="student-select" name="student_id">
+                <option value="">選択してください</option>
+              </select>
+            </div>
+            <label class="checkbox">
+              <input type="checkbox" id="copy-previous" />
+              <span>前回の入力をコピーする</span>
+            </label>
+          </div>
+
+          <div class="tab-pane" data-pane="new">
+            <div class="field">
+              <label for="new-student-name">生徒名</label>
+              <input
+                type="text"
+                id="new-student-name"
+                name="new_student_name"
+                placeholder="例: 山田 花"
+              />
+            </div>
+            <div class="field">
+              <label for="new-student-grade">学年 / クラス</label>
+              <input
+                type="text"
+                id="new-student-grade"
+                name="new_student_grade"
+                placeholder="例: 高校2年A"
+              />
+            </div>
+            <div class="field">
+              <label for="new-student-memo">備考 (任意)</label>
+              <textarea
+                id="new-student-memo"
+                name="new_student_memo"
+                rows="3"
+              ></textarea>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="drive-manual">Drive フォルダ URL / ID (任意)</label>
+            <input
+              type="text"
+              id="drive-manual"
+              name="drive_folder_manual"
+              placeholder="https://drive.google.com/drive/folders/..."
+            />
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="primary">入力をはじめる</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card is-hidden" id="entry-section">
+        <div class="card-header">
+          <div>
+            <h2>2. 振り返り記入</h2>
+            <p class="muted" data-entry-summary></p>
+          </div>
+          <div class="autosave" data-autosave-status>自動保存は未実行</div>
+        </div>
+
+        <div class="inline-message is-hidden" data-entry-message></div>
+        <form id="entry-form" method="post" action="{{ url_for('submit') }}">
+          <input type="hidden" name="teacher_id" />
+          <input type="hidden" name="student_mode" />
+          <input type="hidden" name="student_id" />
+          <input type="hidden" name="new_student_name" />
+          <input type="hidden" name="new_student_grade" />
+          <input type="hidden" name="new_student_memo" />
+          <input type="hidden" name="drive_parent_id" />
+          <input type="hidden" name="student_key" />
+          <input type="hidden" name="student_identifier" />
+          <input type="hidden" name="copy_previous" />
+
+          <div class="grid">
+            <div class="field">
+              <label for="lesson-date">実施日 <span class="required">必須</span></label>
+              <input type="date" id="lesson-date" name="lesson_date" required />
+            </div>
+            <div class="field">
+              <label for="lesson-goal">目的 / ゴール</label>
+              <input
+                type="text"
+                id="lesson-goal"
+                name="lesson_goal"
+                placeholder="例: 入試想定の過去問 2 題を 25 分で解き切る"
+              />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="lesson-summary"
+              >実施内容 <span class="required">必須</span></label
+            >
+            <textarea
+              id="lesson-summary"
+              name="lesson_summary"
+              rows="4"
+              required
+            ></textarea>
+          </div>
+
+          <div class="field">
+            <label for="student-reaction"
+              >生徒の変化・反応 <span class="required">必須</span></label
+            >
+            <textarea
+              id="student-reaction"
+              name="student_reaction"
+              rows="4"
+              required
+            ></textarea>
+          </div>
+
+          <div class="grid">
+            <div class="field">
+              <label for="next-actions">課題 / 次回方針</label>
+              <textarea id="next-actions" name="next_actions" rows="3"></textarea>
+            </div>
+            <div class="field">
+              <label for="memo">共有メモ</label>
+              <textarea id="memo" name="memo" rows="3"></textarea>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button type="button" class="ghost" id="back-button">戻る</button>
+            <button type="submit" class="primary emphasis">登録する</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <script>
+      window.APP_BOOTSTRAP = {{ bootstrap | safe }};
+    </script>
+    <script src="{{ url_for('static', filename='app.js', v=asset_version) }}" defer></script>
+  </body>
+</html>

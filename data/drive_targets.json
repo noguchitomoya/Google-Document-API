@@ -1,0 +1,21 @@
+[
+  {
+    "id": "drive-honsya",
+    "label": "本校共有フォルダ",
+    "folderId": "",
+    "description": "講師全員が閲覧可能"
+  },
+  {
+    "id": "drive-h2-a",
+    "label": "高校2年-A",
+    "folderId": "",
+    "description": "高校2年Aクラス専用"
+  },
+  {
+    "id": "drive-individual",
+    "label": "個別指導ルーム",
+    "folderId": "",
+    "description": "個別カルテ専用"
+  }
+]
+
