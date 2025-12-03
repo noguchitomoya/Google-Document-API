@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>講師ログイン | 振り返りシート</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='styles.css', v=asset_version) }}"
+    />
+  </head>
+  <body class="login-page">
+    <main class="login-card">
+      <h1>講師ログイン</h1>
+      <p class="muted">
+        社員番号とパスワードを入力して、記録用ダッシュボードへアクセスしてください。
+      </p>
+      {% if error %}
+      <div class="alert alert-error">
+        {{ error }}
+      </div>
+      {% endif %}
+      <form method="post">
+        <input type="hidden" name="next" value="{{ next_url }}" />
+        <div class="field">
+          <label for="employee-code">社員番号</label>
+          <input
+            type="text"
+            id="employee-code"
+            name="employee_code"
+            value="{{ employee_code or '' }}"
+            required
+            autocomplete="username"
+          />
+        </div>
+        <div class="field">
+          <label for="password">パスワード</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            required
+            autocomplete="current-password"
+          />
+        </div>
+        <div class="actions">
+          <button type="submit" class="primary">ログイン</button>
+        </div>
+      </form>
+      <p class="muted small">
+        Google 連携が未設定の場合は、ログイン後に画面右上の「Googleと接続」をクリックしてください。
+      </p>
+    </main>
+  </body>
+</html>

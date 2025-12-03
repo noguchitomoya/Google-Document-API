@@ -1,0 +1,44 @@
+[
+  {
+    "id": "guardian-sato-mayumi",
+    "name": "佐藤 真由美",
+    "relationship": "母",
+    "email": "mayumi.sato@example.com"
+  },
+  {
+    "id": "guardian-sato-takashi",
+    "name": "佐藤 隆",
+    "relationship": "父",
+    "email": "takashi.sato@example.com"
+  },
+  {
+    "id": "guardian-morita-emi",
+    "name": "森田 絵美",
+    "relationship": "母",
+    "email": "emi.morita@example.com"
+  },
+  {
+    "id": "guardian-okabe-mika",
+    "name": "岡部 美佳",
+    "relationship": "母",
+    "email": "mika.okabe@example.com"
+  },
+  {
+    "id": "guardian-noguchi-yuki",
+    "name": "野口 優希",
+    "relationship": "父",
+    "email": "yuki.noguchi@example.com"
+  },
+  {
+    "id": "guardian-test-tshimizu",
+    "name": "清水 徹",
+    "relationship": "父",
+    "email": "t.shimizu064@gmail.com"
+  },
+  {
+    "id": "guardian-test-shimitomo",
+    "name": "清水 智世",
+    "relationship": "母",
+    "email": "shimitomo.eup@gmail.com"
+  }
+]

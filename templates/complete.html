@@ -25,6 +25,12 @@
             {{ result.document.name }}
           </a>
         </p>
+        {% if result.folderLink %}
+        <p>
+          <strong>フォルダ:</strong>
+          <a href="{{ result.folderLink }}" target="_blank">Drive フォルダを開く</a>
+        </p>
+        {% endif %}
         {% if result.document.webContentLink %}
         <p>
           <strong>ダウンロード:</strong>
@@ -38,6 +44,39 @@
           }})
         </p>
       </div>
+
+      <section class="notification-summary">
+        <h2>保護者共有</h2>
+        {% if result.guardianNotifications %}
+        <ul>
+          {% for notification in result.guardianNotifications %}
+          <li>
+            <strong>
+              {{ notification.guardian.name }}
+              {% if notification.guardian.relationship %}
+              （{{ notification.guardian.relationship }}）
+              {% endif %}
+            </strong>
+            ：
+            {% if notification.status == "sent" %}
+            送信済み
+            {% elif notification.status == "failed" %}
+            送信失敗
+            {% else %}
+            宛先未設定
+            {% endif %}
+            {% if notification.reason %}
+            <span class="muted">({{ notification.reason }})</span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">
+          保護者連携が登録されていないため、メール送信は行っていません。
+        </p>
+        {% endif %}
+      </section>
 
       <div class="actions">
         <a class="primary" href="{{ url_for('index') }}">別の生徒を続ける</a>

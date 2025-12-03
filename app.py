@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
+import sqlite3
 import threading
 from datetime import datetime, timezone
+from email.message import EmailMessage
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -23,12 +27,184 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from jinja2 import Template
+from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 TEMPLATE_DIR = DATA_DIR / "templates"
 DRAFT_DIR = BASE_DIR / "drafts"
 HISTORY_DIR = BASE_DIR / "history"
+DB_PATH = BASE_DIR / "app.db"
+
+
+def get_db_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def init_db():
+    conn = get_db_connection()
+    with conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS teachers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                subject TEXT,
+                email TEXT,
+                employee_code TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS students (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                grade TEXT,
+                memo TEXT,
+                drive_folder_id TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS guardians (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                relationship TEXT,
+                email TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS student_guardians (
+                student_id TEXT NOT NULL,
+                guardian_id TEXT NOT NULL,
+                PRIMARY KEY (student_id, guardian_id),
+                FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+                FOREIGN KEY (guardian_id) REFERENCES guardians(id) ON DELETE CASCADE
+            )
+            """
+        )
+    conn.close()
+
+
+def bootstrap_db():
+    conn = get_db_connection()
+    try:
+        bootstrap_teachers(conn)
+        bootstrap_students(conn)
+        bootstrap_guardians(conn)
+        bootstrap_student_guardians(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def bootstrap_teachers(conn: sqlite3.Connection):
+    data = load_json(TEACHERS_FILE, [])
+    if not data:
+        return
+    existing_ids = {
+        row["id"] for row in conn.execute("SELECT id FROM teachers").fetchall()
+    }
+    for teacher in data:
+        if teacher["id"] in existing_ids:
+            continue
+        employee_code = teacher.get("employeeCode") or teacher["id"]
+        password_plain = teacher.get("password") or "password123"
+        password_hash = generate_password_hash(password_plain)
+        conn.execute(
+            """
+            INSERT INTO teachers (id, name, subject, email, employee_code, password_hash)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                teacher["id"],
+                teacher["name"],
+                teacher.get("subject", ""),
+                teacher.get("email", ""),
+                employee_code,
+                password_hash,
+            ),
+        )
+
+
+def bootstrap_students(conn: sqlite3.Connection):
+    data = load_json(STUDENTS_FILE, [])
+    if not data:
+        return
+    existing_ids = {
+        row["id"] for row in conn.execute("SELECT id FROM students").fetchall()
+    }
+    for student in data:
+        if student["id"] in existing_ids:
+            continue
+        conn.execute(
+            """
+            INSERT INTO students (id, name, grade, memo, drive_folder_id)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                student["id"],
+                student["name"],
+                student.get("grade", ""),
+                student.get("memo", ""),
+                student.get("driveFolderId", ""),
+            ),
+        )
+
+
+def bootstrap_guardians(conn: sqlite3.Connection):
+    data = load_json(GUARDIANS_FILE, [])
+    if not data:
+        return
+    existing_ids = {
+        row["id"] for row in conn.execute("SELECT id FROM guardians").fetchall()
+    }
+    for guardian in data:
+        if guardian["id"] in existing_ids:
+            continue
+        conn.execute(
+            """
+            INSERT INTO guardians (id, name, relationship, email)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                guardian["id"],
+                guardian["name"],
+                guardian.get("relationship", ""),
+                guardian.get("email", ""),
+            ),
+        )
+
+
+def bootstrap_student_guardians(conn: sqlite3.Connection):
+    data = load_json(STUDENT_GUARDIANS_FILE, {})
+    if not isinstance(data, dict):
+        return
+    existing_links = {
+        (row["student_id"], row["guardian_id"])
+        for row in conn.execute(
+            "SELECT student_id, guardian_id FROM student_guardians"
+        ).fetchall()
+    }
+    for student_id, guardian_ids in data.items():
+        for guardian_id in guardian_ids:
+            if (student_id, guardian_id) in existing_links:
+                continue
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO student_guardians (student_id, guardian_id)
+                VALUES (?, ?)
+                """,
+                (student_id, guardian_id),
+            )
 
 for directory in (DRAFT_DIR, HISTORY_DIR):
     directory.mkdir(parents=True, exist_ok=True)
@@ -36,21 +212,26 @@ for directory in (DRAFT_DIR, HISTORY_DIR):
 TEACHERS_FILE = DATA_DIR / "teachers.json"
 STUDENTS_FILE = DATA_DIR / "students.json"
 DRIVE_TARGETS_FILE = DATA_DIR / "drive_targets.json"
+GUARDIANS_FILE = DATA_DIR / "guardians.json"
+STUDENT_GUARDIANS_FILE = DATA_DIR / "student_guardians.json"
 
 DEFAULT_TEMPLATE_NAME = os.getenv("DEFAULT_TEMPLATE_NAME", "reflection_template.md")
 TEMPLATE_PATH = TEMPLATE_DIR / DEFAULT_TEMPLATE_NAME
 ASSET_VERSION = os.getenv("ASSET_VERSION", "20251127")
+FIXED_DRIVE_PARENT_ID = os.getenv(
+    "FIXED_DRIVE_PARENT_ID", "1o8Zxmet43AdIaSrUbVevhdBWeqsKjY-l"
+)
 
 OAUTH_SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 OAUTH_TOKEN_FILE = BASE_DIR / "oauth_token.json"
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 
-students_lock = threading.Lock()
 history_lock = threading.Lock()
 
 
@@ -109,6 +290,36 @@ def pop_oauth_flash() -> str | None:
     return session.pop("oauth_message", None)
 
 
+def current_teacher() -> dict | None:
+    teacher_id = session.get("teacher_id")
+    if not teacher_id:
+        return None
+    return find_teacher(teacher_id)
+
+
+def require_current_teacher() -> dict:
+    teacher = current_teacher()
+    if not teacher:
+        raise RuntimeError("講師アカウントでログインしてください。")
+    return teacher
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if "teacher_id" not in session:
+            next_url = request.full_path if request.method == "GET" else url_for("index")
+            return redirect(url_for("login_form", next=next_url))
+        return view(*args, **kwargs)
+
+    return wrapper
+
+
+@app.context_processor
+def inject_current_teacher():
+    return {"current_teacher": current_teacher()}
+
+
 class GoogleWorkspaceClient:
     """Wrapper around Drive / Docs APIs."""
 
@@ -118,6 +329,7 @@ class GoogleWorkspaceClient:
             "drive", "v3", credentials=self.credentials, cache_discovery=False
         )
         self.docs = build("docs", "v1", credentials=self.credentials, cache_discovery=False)
+        self.gmail = build("gmail", "v1", credentials=self.credentials, cache_discovery=False)
 
     def ensure_student_folder(
         self,
@@ -200,6 +412,42 @@ class GoogleWorkspaceClient:
         )
         return metadata
 
+    def send_email(self, message: EmailMessage) -> dict:
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+        body = {"raw": raw}
+        return (
+            self.gmail.users()
+            .messages()
+            .send(userId="me", body=body)
+            .execute()
+        )
+
+    def share_document_with_guardian(
+        self, file_id: str, email: str, allow_comment: bool = True
+    ):
+        """Grant viewer/commenter access to a guardian email."""
+        role = "commenter" if allow_comment else "reader"
+        body = {
+            "type": "user",
+            "role": role,
+            "emailAddress": email,
+        }
+        try:
+            (
+                self.drive.permissions()
+                .create(
+                    fileId=file_id,
+                    body=body,
+                    fields="id",
+                    sendNotificationEmail=False,
+                )
+                .execute()
+            )
+        except HttpError as exc:  # noqa: BLE001
+            app.logger.warning(
+                "Failed to add permission for %s on %s: %s", email, file_id, exc
+            )
+
 
 def load_json(path: Path, default: Any) -> Any:
     if not path.exists():
@@ -214,20 +462,56 @@ def save_json(path: Path, payload: Any):
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_teachers() -> list[dict]:
-    return load_json(TEACHERS_FILE, [])
+init_db()
+bootstrap_db()
 
+
+def load_teachers() -> list[dict]:
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, name, subject, email, employee_code FROM teachers ORDER BY name"
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 def load_students() -> list[dict]:
-    return load_json(STUDENTS_FILE, [])
-
-
-def save_students(students: list[dict]):
-    save_json(STUDENTS_FILE, students)
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, name, grade, memo, drive_folder_id FROM students ORDER BY name"
+        ).fetchall()
+        students = []
+        for row in rows:
+            data = dict(row)
+            data["driveFolderId"] = data.pop("drive_folder_id", "")
+            students.append(data)
+        return students
+    finally:
+        conn.close()
 
 
 def load_drive_targets() -> list[dict]:
     return load_json(DRIVE_TARGETS_FILE, [])
+
+
+def find_guardians_for_student(student_id: str) -> list[dict]:
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT g.id, g.name, g.relationship, g.email
+            FROM guardians g
+            INNER JOIN student_guardians sg ON sg.guardian_id = g.id
+            WHERE sg.student_id = ?
+            ORDER BY g.name
+            """,
+            (student_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def read_template_text() -> str:
@@ -264,11 +548,100 @@ def build_student_key(teacher_id: str, identifier: str) -> str:
 
 
 def find_teacher(teacher_id: str) -> dict | None:
-    return next((t for t in load_teachers() if t["id"] == teacher_id), None)
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, name, subject, email, employee_code FROM teachers WHERE id = ?",
+            (teacher_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def find_teacher_by_employee_code(employee_code: str) -> dict | None:
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT id, name, subject, email, employee_code, password_hash
+            FROM teachers
+            WHERE employee_code = ?
+            """,
+            (employee_code,),
+        ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+    finally:
+        conn.close()
 
 
 def find_student(student_id: str) -> dict | None:
-    return next((s for s in load_students() if s["id"] == student_id), None)
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, name, grade, memo, drive_folder_id FROM students WHERE id = ?",
+            (student_id,),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        data["driveFolderId"] = data.pop("drive_folder_id", "")
+        return data
+    finally:
+        conn.close()
+
+
+def upsert_student_record(student: dict):
+    conn = get_db_connection()
+    try:
+        existing = conn.execute(
+            "SELECT id, name, grade, memo, drive_folder_id FROM students WHERE id = ?",
+            (student["id"],),
+        ).fetchone()
+        next_payload = {
+            "name": student.get("name") or (existing["name"] if existing else ""),
+            "grade": student.get("grade") or (existing["grade"] if existing else ""),
+            "memo": student.get("memo") or (existing["memo"] if existing else ""),
+            "drive_folder_id": student.get("driveFolderId")
+            or student.get("drive_folder_id")
+            or (existing["drive_folder_id"] if existing else ""),
+        }
+        if existing:
+            conn.execute(
+                """
+                UPDATE students
+                SET name = ?, grade = ?, memo = ?, drive_folder_id = ?
+                WHERE id = ?
+                """,
+                (
+                    next_payload["name"],
+                    next_payload["grade"],
+                    next_payload["memo"],
+                    next_payload["drive_folder_id"],
+                    student["id"],
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO students (id, name, grade, memo, drive_folder_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    student["id"],
+                    next_payload["name"],
+                    next_payload["grade"],
+                    next_payload["memo"],
+                    next_payload["drive_folder_id"],
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def store_draft(student_key: str, payload: dict):
@@ -318,7 +691,8 @@ def base_context(**overrides) -> dict:
     context = {
         "teachers": load_teachers(),
         "students": load_students(),
-        "drive_targets": load_drive_targets(),
+        "driveTargets": load_drive_targets(),
+        "currentTeacher": current_teacher(),
     }
     context.update(overrides)
     return context
@@ -446,11 +820,16 @@ def build_doc_requests_from_blocks(blocks: list[dict]) -> list[dict]:
 
 
 @app.get("/")
+@login_required
 def index():
+    teacher = require_current_teacher()
     bootstrap = {
         "teachers": load_teachers(),
         "students": load_students(),
         "driveTargets": load_drive_targets(),
+        "currentTeacher": teacher,
+        "fixedDriveParentId": FIXED_DRIVE_PARENT_ID,
+        "fixedDriveFolderLink": f"https://drive.google.com/drive/folders/{FIXED_DRIVE_PARENT_ID}",
     }
     return render_template(
         "index.html",
@@ -462,6 +841,7 @@ def index():
 
 
 @app.get("/oauth/start")
+@login_required
 def oauth_start():
     try:
         flow = Flow.from_client_secrets_file(
@@ -510,7 +890,49 @@ def oauth_callback():
     return redirect(url_for("index"))
 
 
+@app.get("/login")
+def login_form():
+    if session.get("teacher_id"):
+        return redirect(url_for("index"))
+    next_url = request.args.get("next") or url_for("index")
+    return render_template(
+        "login.html",
+        error=None,
+        next_url=next_url,
+        asset_version=ASSET_VERSION,
+        employee_code="",
+    )
+
+
+@app.post("/login")
+def login_submit():
+    employee_code = request.form.get("employee_code", "").strip()
+    password = request.form.get("password", "")
+    next_url = request.form.get("next") or url_for("index")
+    teacher = find_teacher_by_employee_code(employee_code)
+    if not teacher or not check_password_hash(teacher["password_hash"], password):
+        return render_template(
+            "login.html",
+            error="社員番号またはパスワードが正しくありません。",
+            next_url=next_url,
+            asset_version=ASSET_VERSION,
+            employee_code=employee_code,
+        ), 401
+    session["teacher_id"] = teacher["id"]
+    return redirect(next_url)
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    session.pop("teacher_id", None)
+    session.pop("oauth_state", None)
+    session.pop("oauth_message", None)
+    session.modified = True
+    return redirect(url_for("login_form"))
+
+
 @app.post("/api/drafts")
+@login_required
 def api_save_draft():
     data = request.get_json(force=True, silent=True) or {}
     student_key = data.get("studentKey")
@@ -522,6 +944,7 @@ def api_save_draft():
 
 
 @app.get("/api/drafts")
+@login_required
 def api_get_draft():
     student_key = request.args.get("studentKey")
     if not student_key:
@@ -531,14 +954,14 @@ def api_get_draft():
 
 
 @app.get("/api/context")
+@login_required
 def api_context():
-    teacher_id = request.args.get("teacherId", "").strip()
+    teacher = require_current_teacher()
+    teacher_id = teacher["id"]
     mode = request.args.get("mode", "existing")
     student_id = request.args.get("studentId", "").strip()
     student_name = request.args.get("studentName", "").strip()
     copy_previous = request.args.get("copyPrevious", "false").lower() == "true"
-    if not teacher_id:
-        return jsonify({"error": "teacherId is required"}), 400
     if mode == "existing" and not student_id:
         return jsonify({"error": "studentId is required"}), 400
     if mode == "new" and not student_name:
@@ -569,25 +992,15 @@ def api_context():
 
 
 @app.post("/submit")
+@login_required
 def submit():
     form = request.form
-    teacher_id = form.get("teacher_id", "")
+    teacher = require_current_teacher()
+    teacher_id = teacher["id"]
     mode = form.get("student_mode", "existing")
     copy_previous = form.get("copy_previous") == "on"
-    teacher = find_teacher(teacher_id)
-    if not teacher:
-        return render_template(
-            "index.html",
-            error="講師を選択してください。",
-            bootstrap=json.dumps(base_context(), ensure_ascii=False),
-            asset_version=ASSET_VERSION,
-            oauth_status=oauth_status(),
-            oauth_message=None,
-        ), 400
 
-    drive_parent_id = form.get("drive_parent_id") or os.getenv(
-        "DEFAULT_DRIVE_PARENT_ID", ""
-    )
+    drive_parent_id = FIXED_DRIVE_PARENT_ID
     submitted_student_key = form.get("student_key") or ""
     submitted_identifier = form.get("student_identifier") or ""
     resolved_student = None
@@ -667,28 +1080,140 @@ def submit():
             oauth_message=None,
         ), 500
 
-    if not resolved_student.get("driveFolderId"):
-        resolved_student["driveFolderId"] = folder_id
-        with students_lock:
-            students = load_students()
-            existing = next((s for s in students if s["id"] == resolved_student["id"]), None)
-            if existing:
-                existing["driveFolderId"] = folder_id
-            else:
-                students.append(resolved_student)
-            save_students(students)
+    resolved_student["driveFolderId"] = folder_id
+    upsert_student_record(resolved_student)
 
     append_history(student_key, payload)
     delete_draft(student_key)
 
+    guardian_notifications: list[dict] = []
+    try:
+        guardian_notifications = notify_guardians(
+            client=client,
+            student=resolved_student,
+            teacher=teacher,
+            document_meta=document_meta,
+            payload=payload,
+        )
+    except Exception as exc:  # noqa: BLE001
+        app.logger.exception("Failed to notify guardians: %s", exc)
+
+    folder_link = (
+        f"https://drive.google.com/drive/folders/{folder_id}" if folder_id else ""
+    )
     result = {
         "document": document_meta,
-        "student": {"name": student_name, "grade": student_grade},
+        "student": {
+            "id": resolved_student["id"],
+            "name": student_name,
+            "grade": student_grade,
+            "driveFolderId": folder_id,
+        },
         "teacher": teacher,
         "savedAt": timestamp(),
         "copyPreviousUsed": copy_previous,
+        "guardianNotifications": guardian_notifications,
+        "folderLink": folder_link,
     }
     return render_template("complete.html", result=result, asset_version=ASSET_VERSION)
+
+
+def notify_guardians(
+    client: GoogleWorkspaceClient,
+    student: dict,
+    teacher: dict,
+    document_meta: dict,
+    payload: dict,
+) -> list[dict]:
+    student_id = student.get("id", "")
+    if not student_id:
+        return []
+    guardians = find_guardians_for_student(student_id)
+    notifications: list[dict] = []
+    if not guardians:
+        app.logger.info("No guardians linked to student %s", student_id)
+        return notifications
+    # 代表保護者（先頭1名）のみに通知
+    guardians = guardians[:1]
+    for guardian in guardians:
+        guardian_email = (guardian.get("email") or "").strip()
+        if not guardian_email:
+            notifications.append(
+                {"guardian": guardian, "status": "skipped", "reason": "missing_email"}
+            )
+            continue
+        try:
+            client.share_document_with_guardian(
+                document_meta["id"], guardian_email, allow_comment=True
+            )
+        except Exception as exc:  # noqa: BLE001
+            app.logger.warning(
+                "Permission grant failed for %s: %s", guardian_email, exc
+            )
+            notifications.append(
+                {"guardian": guardian, "status": "failed", "reason": f"permission: {exc}"}
+            )
+            continue
+        message = build_guardian_email(
+            guardian=guardian,
+            student=student,
+            teacher=teacher,
+            document_meta=document_meta,
+            payload=payload,
+        )
+        try:
+            client.send_email(message)
+            notifications.append({"guardian": guardian, "status": "sent"})
+        except HttpError as exc:
+            app.logger.exception(
+                "Failed to send email to %s: %s", guardian_email, exc
+            )
+            notifications.append(
+                {"guardian": guardian, "status": "failed", "reason": str(exc)}
+            )
+    return notifications
+
+
+def build_guardian_email(
+    guardian: dict,
+    student: dict,
+    teacher: dict,
+    document_meta: dict,
+    payload: dict,
+) -> EmailMessage:
+    student_name = student.get("name", "")
+    guardian_name = guardian.get("name", "")
+    teacher_name = teacher.get("name", "")
+    lesson_date = payload.get("lesson_date", "")
+    summary = payload.get("lesson_summary", "").strip() or "（記入なし）"
+    next_actions = payload.get("next_actions", "").strip() or "（記入なし）"
+    doc_url = document_meta.get("webViewLink", "")
+
+    message = EmailMessage()
+    message["To"] = guardian.get("email")
+    from_email = teacher.get("email") or "no-reply@example.com"
+    message["From"] = f"{teacher_name} <{from_email}>"
+    message["Subject"] = f"{student_name}さんの授業振り返り（{lesson_date}）"
+
+    body = "\n".join(
+        [
+            f"{guardian_name} 様",
+            "",
+            "いつもお世話になっております。",
+            f"{teacher_name}です。",
+            "",
+            f"{student_name}さんの授業振り返りシートを作成しました。",
+            f"以下のリンクよりご確認ください: {doc_url}",
+            "",
+            f"◆ 授業日: {lesson_date}",
+            f"◆ 概要: {summary}",
+            f"◆ 次回に向けて: {next_actions}",
+            "",
+            "ご不明な点がございましたらお気軽にご連絡ください。",
+        ]
+    )
+    message.set_content(body)
+    return message
 
 
 @app.get("/healthz")

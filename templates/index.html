@@ -12,19 +12,36 @@
   <body>
     <header class="app-header">
       <div>
-        <p class="eyebrow">Reflection Support</p>
-        <h1>振り返りシート自動保存</h1>
+        <h1 class="hero-heading">振り返りシート自動保存ダッシュボード</h1>
+        <p class="app-subhead">
+          記録・通知・共有までを 3 ステップで完了。授業直後の振り返りを、迷わずスムーズに。
+        </p>
+        <ul class="step-indicator">
+          <li class="is-active"><span class="badge">1</span>対象設定</li>
+          <li><span class="badge">2</span>振り返り記入</li>
+          <li><span class="badge">3</span>保護者へ共有</li>
+        </ul>
       </div>
-      <div class="header-meta">
-        {% if oauth_status.connected %}
-        <span class="status-dot is-online"></span>
-        <span>Google 接続済み</span>
-        <a class="ghost small" href="{{ url_for('oauth_start') }}">再認証</a>
-        {% else %}
-        <span class="status-dot is-offline"></span>
-        <span>Google 未接続</span>
-        <a class="primary small" href="{{ url_for('oauth_start') }}">Googleと接続</a>
+      <div class="toolbar">
+        <div class="user-card">
+          <span class="label">ログイン中</span>
+          <strong>{{ current_teacher.name }}</strong>
+          <span class="muted">社員番号: {{ current_teacher.employee_code }}</span>
+          <span class="muted">担当: {{ current_teacher.subject }}</span>
+        </div>
+        {% if not oauth_status.connected %}
+        <div class="status-pill is-alert">
+          <span class="status-dot is-offline"></span>
+          <span>Google 未接続</span>
+          <a class="primary small" href="{{ url_for('oauth_start') }}">接続</a>
+        </div>
         {% endif %}
+        <div class="actions">
+          {% if oauth_status.connected %}
+          <a class="ghost small subtle" href="{{ url_for('oauth_start') }}">再認証</a>
+          {% endif %}
+          <a class="ghost small" href="{{ url_for('logout') }}">ログアウト</a>
+        </div>
       </div>
     </header>
 
@@ -50,17 +67,18 @@
         <div class="card-header">
           <h2>1. 対象の選択</h2>
           <p class="muted">
-            講師・生徒・保存先を選択すると、次の画面で入力フォームが開きます。
+            生徒を選択すると、自動的に固定フォルダへ保存されます。
+            <a
+              class="inline-link"
+              href="https://drive.google.com/drive/folders/1o8Zxmet43AdIaSrUbVevhdBWeqsKjY-l"
+              target="_blank"
+              rel="noreferrer"
+              >保存フォルダを開く</a
+            >
           </p>
         </div>
         <div class="inline-message is-hidden" data-error-box></div>
         <form id="setup-form">
-          <div class="field">
-            <label for="teacher-select">講師</label>
-            <select id="teacher-select" name="teacher_id" required>
-              <option value="">選択してください</option>
-            </select>
-          </div>
 
           <div class="tabs" role="tablist">
             <button
@@ -123,16 +141,6 @@
             </div>
           </div>
 
-          <div class="field">
-            <label for="drive-manual">Drive フォルダ URL / ID (任意)</label>
-            <input
-              type="text"
-              id="drive-manual"
-              name="drive_folder_manual"
-              placeholder="https://drive.google.com/drive/folders/..."
-            />
-          </div>
-
           <div class="actions">
             <button type="submit" class="primary">入力をはじめる</button>
           </div>
@@ -143,14 +151,13 @@
         <div class="card-header">
           <div>
             <h2>2. 振り返り記入</h2>
-            <p class="muted" data-entry-summary></p>
+              <p class="muted" data-entry-summary>講師と生徒を選択すると概要が表示されます。</p>
           </div>
           <div class="autosave" data-autosave-status>自動保存は未実行</div>
         </div>
 
         <div class="inline-message is-hidden" data-entry-message></div>
         <form id="entry-form" method="post" action="{{ url_for('submit') }}">
-          <input type="hidden" name="teacher_id" />
           <input type="hidden" name="student_mode" />
           <input type="hidden" name="student_id" />
           <input type="hidden" name="new_student_name" />
@@ -214,7 +221,9 @@
 
           <div class="actions">
             <button type="button" class="ghost" id="back-button">戻る</button>
-            <button type="submit" class="primary emphasis">登録する</button>
+            <button type="submit" class="primary emphasis" data-submit-button>
+              登録する
+            </button>
           </div>
         </form>
       </section>

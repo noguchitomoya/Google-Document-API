@@ -9,9 +9,7 @@
 
   const setupForm = document.getElementById("setup-form");
   const entryForm = document.getElementById("entry-form");
-  const teacherSelect = document.getElementById("teacher-select");
   const studentSelect = document.getElementById("student-select");
-  const driveManual = document.getElementById("drive-manual");
   const copyPreviousCheckbox = document.getElementById("copy-previous");
   const entrySection = document.getElementById("entry-section");
   const stepSection = document.getElementById("step-picker");
@@ -20,23 +18,30 @@
   const entrySummary = document.querySelector("[data-entry-summary]");
   const setupErrorBox = document.querySelector("[data-error-box]");
   const entryMessageBox = document.querySelector("[data-entry-message]");
+  const submitButton = document.querySelector("[data-submit-button]");
 
   const MODE = { EXISTING: "existing", NEW: "new" };
   const AUTOSAVE_DELAY = 1200;
+
+  const currentTeacher = bootstrap.currentTeacher || null;
+  const fixedDriveParentId = bootstrap.fixedDriveParentId || "";
+  const fixedDriveFolderLink = bootstrap.fixedDriveFolderLink || "";
+  const fixedDriveLabel = fixedDriveFolderLink ? "固定フォルダ" : fixedDriveParentId || "固定フォルダ";
 
   const state = {
     mode: MODE.EXISTING,
     copyPrevious: false,
     context: null,
-    teacherId: "",
-    teacherName: "",
+    teacherId: currentTeacher ? currentTeacher.id : "",
+    teacherName: currentTeacher ? currentTeacher.name : "",
     studentId: "",
     studentName: "",
-    driveParentId: "",
-    driveLabel: "",
+    driveParentId: fixedDriveParentId,
+    driveLabel: fixedDriveLabel,
     listenersBound: false,
     autosaveTimer: null,
     lastPayload: null,
+    processing: false,
   };
 
   function getSelectedOption(select) {
@@ -49,12 +54,10 @@
   }
 
   function init() {
-    populateSelect(teacherSelect, bootstrap.teachers, (teacher) => ({
-      value: teacher.id,
-      label: teacher.subject
-        ? `${teacher.name}（${teacher.subject}）`
-        : teacher.name,
-    }));
+    if (!currentTeacher) {
+      console.error("Logged-in teacher context is missing.");
+      return;
+    }
     populateSelect(studentSelect, bootstrap.students, (student) => ({
       value: student.id,
       label: `${student.name}（${student.grade || "学年未設定"}）`,
@@ -107,11 +110,10 @@
       event.preventDefault();
       clearError();
 
-      const teacherId = teacherSelect.value;
-      if (!teacherId) {
-        return showError("講師を選択してください。");
+      const teacher = currentTeacher;
+      if (!teacher) {
+        return showError("講師情報を取得できません。再ログインしてください。");
       }
-      const teacher = bootstrap.teachers.find((t) => t.id === teacherId);
 
       let studentId = "";
       let studentName = "";
@@ -142,19 +144,15 @@
         }
       }
 
-      const driveParentId = deriveDriveFolderId();
-      const driveLabel = deriveDriveFolderLabel(driveParentId) || "未指定（デフォルト）";
-
       state.copyPrevious = copyPreviousCheckbox.checked;
-      state.teacherId = teacherId;
+      state.teacherId = teacher.id;
       state.teacherName = teacher ? teacher.name : "";
       state.studentId = studentId;
       state.studentName = studentName;
-      state.driveParentId = driveParentId;
-      state.driveLabel = driveLabel;
+      state.driveParentId = fixedDriveParentId;
+      state.driveLabel = fixedDriveLabel;
 
       const params = new URLSearchParams({
-        teacherId,
         mode: state.mode,
         copyPrevious: String(state.copyPrevious),
       });
@@ -176,8 +174,6 @@
           teacher,
           newStudentGrade,
           newStudentMemo,
-          driveParentId,
-          driveLabel,
         });
       } catch (error) {
         showError(error.message);
@@ -186,45 +182,9 @@
     });
   }
 
-  function deriveDriveFolderId() {
-    const manual = driveManual.value.trim();
-    if (manual) {
-      return extractDriveFolderId(manual);
-    }
-    return "";
-  }
-
-  function deriveDriveFolderLabel(folderId) {
-    const manual = driveManual.value.trim();
-    if (manual) {
-      return manual;
-    }
-    if (folderId) {
-      return folderId;
-    }
-    return "";
-  }
-
-  function extractDriveFolderId(value) {
-    if (!value) return "";
-    const folderMatch = value.match(/\/folders\/([a-zA-Z0-9_-]+)/);
-    if (folderMatch) {
-      return folderMatch[1];
-    }
-    const idMatch = value.match(/id=([a-zA-Z0-9_-]+)/);
-    if (idMatch) {
-      return idMatch[1];
-    }
-    if (/^[a-zA-Z0-9_-]+$/.test(value)) {
-      return value;
-    }
-    return "";
-  }
-
   function openEntrySection({ context, teacher, newStudentGrade, newStudentMemo }) {
     state.context = context;
 
-    entryForm.elements.teacher_id.value = state.teacherId;
     entryForm.elements.student_mode.value = state.mode;
     entryForm.elements.drive_parent_id.value = state.driveParentId;
     entryForm.elements.copy_previous.value = state.copyPrevious ? "on" : "off";
@@ -244,7 +204,17 @@
     }
 
     const teacherName = teacher ? teacher.name : "";
-    entrySummary.textContent = `${teacherName} → ${state.studentName} ／ 保存先: ${state.driveLabel}`;
+    const summaryText = `${teacherName} → ${state.studentName} ／ 保存先: ${state.driveLabel}`;
+    entrySummary.textContent = summaryText;
+    if (fixedDriveFolderLink) {
+      const link = document.createElement("a");
+      link.href = fixedDriveFolderLink;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = "フォルダを開く";
+      link.className = "inline-link";
+      entrySummary.append(" / ", link);
+    }
 
     if (state.copyPrevious && context.previous) {
       setEntryMessage(
@@ -396,6 +366,7 @@
         clearTimeout(state.autosaveTimer);
       }
       setAutosaveStatus("info", "登録処理を開始します…");
+      setProcessingState(true);
     });
   }
 
@@ -405,6 +376,19 @@
       entrySection.classList.add("is-hidden");
       stepSection.scrollIntoView({ behavior: "smooth" });
     });
+  }
+
+  function setProcessingState(active) {
+    if (!submitButton) return;
+    state.processing = active;
+    submitButton.disabled = active;
+    submitButton.classList.toggle("is-processing", active);
+    if (active) {
+      submitButton.dataset.originalText = submitButton.textContent;
+      submitButton.textContent = "登録中…";
+    } else if (submitButton.dataset.originalText) {
+      submitButton.textContent = submitButton.dataset.originalText;
+    }
   }
 
   init();
